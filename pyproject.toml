@@ -1,0 +1,16 @@
+[project]
+name = "generative-art-nft"
+version = "0.1.0"
+description = "Generates images and metadata for NFT collections using an asset library"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pillow>=10.0.0",
+    "pandas>=2.0.0",
+    "progressbar2>=4.2.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+]
+
+[tool.uv]
+dev-dependencies = []
