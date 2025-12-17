@@ -7,7 +7,7 @@ from progressbar import progressbar
 import numpy as np
 from scipy.stats import qmc
 
-from config import CONFIG
+from config import LAYERS
 
 # Initialize random number generator
 rng = np.random.default_rng()
@@ -17,10 +17,13 @@ ASSETS_PATH = pathlib.Path("assets")
 OUTPUT_PATH = pathlib.Path("output")
 
 
-def parse_config() -> None:
+
+def parse_config() -> List[dict]:
     """Parse the configuration file and validate layer setup."""
-    for layer in CONFIG:
-        layer_path = ASSETS_PATH / layer["directory"]
+    config = []
+
+    for name, directory, required, rarity_weights in LAYERS:
+        layer_path = ASSETS_PATH / directory
         if not layer_path.exists():
             raise FileNotFoundError(f"Layer directory not found: {layer_path}")
 
@@ -28,21 +31,26 @@ def parse_config() -> None:
         traits = sorted([trait.name for trait in layer_path.glob("*.png")])
 
         # Add None option for optional layers
-        if not layer["required"]:
+        if not required:
             traits.insert(0, None)
 
         # Process rarity weights
-        rarities = _process_rarity_weights(layer["rarity_weights"], traits)
+        rarities = _process_rarity_weights(rarity_weights, traits)
         rarities = np.array(rarities) / sum(rarities)
 
-        # Update layer config
-        layer.update(
-            {
-                "rarity_weights": rarities,
-                "cum_rarity_weights": np.cumsum(rarities),
-                "traits": traits,
-            }
-        )
+        # Create layer config dict
+        layer_config = {
+            "name": name,
+            "directory": directory,
+            "required": required,
+            "rarity_weights": rarity_weights,
+            "traits": traits,
+            "rarity_weights_normalized": rarities,
+            "cum_rarity_weights": np.cumsum(rarities),
+        }
+        config.append(layer_config)
+
+    return config
 
 
 def _process_rarity_weights(rarity_config, traits: List) -> List[float]:
@@ -99,34 +107,35 @@ def generate_single_image(filepaths, output_filename=None):
     bg.save(output_filename)
 
 
-def get_total_combinations():
+def get_total_combinations(config: List[dict]) -> int:
     """Get total number of distinct possible combinations."""
     total = 1
-    for layer in CONFIG:
+    for layer in config:
         total = total * len(layer["traits"])
     return total
 
 
-def generate_all_trait_sets(num_samples: int) -> List[Tuple[List, List[pathlib.Path]]]:
+def generate_all_trait_sets(config: List[dict], num_samples: int) -> List[Tuple[List, List[pathlib.Path]]]:
     """Generate unique trait combinations using Halton sequences with oversampling.
 
     Args:
+        config: Parsed layer configuration
         num_samples: Number of NFTs to generate
 
     Returns:
         List of (trait_names, trait_paths) tuples for each sample
     """
-    num_layers = len(CONFIG)
+    num_layers = len(config)
 
     # Oversample to account for duplicates, cap at total possible combinations
-    n_candidates = min(num_samples * 2, get_total_combinations())
+    n_candidates = min(num_samples * 2, get_total_combinations(config))
 
     # Generate Halton quasi-random matrix
     sampler = qmc.Halton(d=num_layers, seed=rng)
     random_matrix = sampler.random(n=n_candidates)
 
     # Get cumulative distributions for inverse transform sampling
-    cum_rarities_list = [layer["cum_rarity_weights"] for layer in CONFIG]
+    cum_rarities_list = [layer["cum_rarity_weights"] for layer in config]
 
     # Convert uniform [0,1) values to trait indices
     indices_matrix = get_trait_indices(random_matrix, cum_rarities_list)
@@ -139,11 +148,11 @@ def generate_all_trait_sets(num_samples: int) -> List[Tuple[List, List[pathlib.P
 
         for layer_idx in range(num_layers):
             trait_idx = indices_matrix[sample_idx, layer_idx]
-            trait_name = CONFIG[layer_idx]["traits"][trait_idx]
+            trait_name = config[layer_idx]["traits"][trait_idx]
             trait_names.append(trait_name)
 
             if trait_name is not None:
-                trait_path = ASSETS_PATH / CONFIG[layer_idx]["directory"] / trait_name
+                trait_path = ASSETS_PATH / config[layer_idx]["directory"] / trait_name
                 trait_paths.append(trait_path)
 
         all_combinations.append((trait_names, trait_paths))
@@ -158,10 +167,11 @@ def generate_all_trait_sets(num_samples: int) -> List[Tuple[List, List[pathlib.P
     return result
 
 
-def generate_images(edition: str, count: int) -> pd.DataFrame:
+def generate_images(config: List[dict], edition: str, count: int) -> pd.DataFrame:
     """Generate NFT images and return metadata DataFrame.
 
     Args:
+        config: Parsed layer configuration
         edition: Edition name for output directory
         count: Number of images to generate
 
@@ -169,7 +179,7 @@ def generate_images(edition: str, count: int) -> pd.DataFrame:
         DataFrame with trait metadata for each generated NFT
     """
     # Initialize rarity tracking
-    rarity_data = {layer["name"]: [] for layer in CONFIG}
+    rarity_data = {layer["name"]: [] for layer in config}
 
     # Create output directory
     images_dir = OUTPUT_PATH / f"edition_{edition}" / "images"
@@ -179,7 +189,7 @@ def generate_images(edition: str, count: int) -> pd.DataFrame:
     zfill_width = len(str(count - 1))
 
     # Generate all trait combinations upfront
-    all_trait_sets = generate_all_trait_sets(count)
+    all_trait_sets = generate_all_trait_sets(config, count)
 
     # Generate images
     for idx in progressbar(range(count)):
@@ -191,7 +201,7 @@ def generate_images(edition: str, count: int) -> pd.DataFrame:
 
         # Record traits for metadata (remove .png extension)
         for layer_idx, trait_name in enumerate(trait_names):
-            layer_name = CONFIG[layer_idx]["name"]
+            layer_name = config[layer_idx]["name"]
             clean_trait = trait_name.replace(".png", "") if trait_name else "none"
             rarity_data[layer_name].append(clean_trait)
 
@@ -201,9 +211,9 @@ def generate_images(edition: str, count: int) -> pd.DataFrame:
     return metadata_df
 
 
-def generate_rarity_stats(metadata_df: pd.DataFrame) -> None:
+def generate_rarity_stats(config: List[dict], metadata_df: pd.DataFrame) -> None:
     """Generate and display rarity statistics comparing actual vs target distributions."""
-    for layer in CONFIG:
+    for layer in config:
         layer_name = layer["name"]
         if layer_name not in metadata_df.columns:
             continue
@@ -214,7 +224,7 @@ def generate_rarity_stats(metadata_df: pd.DataFrame) -> None:
         target_dist = dict(
             zip(
                 [t.replace(".png", "") if t else "none" for t in layer["traits"]],
-                [float(w) for w in layer["rarity_weights"]],
+                [float(w) for w in layer["rarity_weights_normalized"]],
             )
         )
 
@@ -263,10 +273,10 @@ def _print_trait_differences(target_dist: dict, actual_dist: dict) -> float:
 def main() -> None:
     """Main NFT generation workflow."""
     print("Checking assets...")
-    parse_config()
+    config = parse_config()
     print("✅ Assets validated successfully!\n")
 
-    total_combinations = get_total_combinations()
+    total_combinations = get_total_combinations(config)
     print(f"You can create up to {total_combinations} distinct avatars\n")
 
     # Get user input
@@ -274,7 +284,7 @@ def main() -> None:
     edition_name = input("What would you like to call this edition?: ").strip()
 
     print("Starting generation...")
-    metadata_df = generate_images(edition_name, num_avatars)
+    metadata_df = generate_images(config, edition_name, num_avatars)
 
     print("Saving metadata...")
     metadata_path = OUTPUT_PATH / f"edition_{edition_name}" / "metadata.csv"
@@ -282,7 +292,7 @@ def main() -> None:
 
     # Generate rarity statistics
     print("\n=== Rarity Statistics ===")
-    generate_rarity_stats(metadata_df)
+    generate_rarity_stats(config, metadata_df)
 
     print("✅ Task complete!")
     print(f"\n📝 Next step: Run 'python metadata.py' to generate JSON metadata files")
