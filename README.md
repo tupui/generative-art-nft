@@ -11,6 +11,10 @@ uv sync
 
 ## Usage
 
+### Configuration
+
+Edit `config.py` to define layers and rarity weights and place layer images in `assets/` directory.
+
 ### Generate Images
 ```bash
 uv run python nft.py
@@ -22,34 +26,6 @@ Creates composite images using quasi-Monte Carlo sampling for rarity distributio
 uv run python metadata.py
 ```
 Creates individual JSON metadata files following OpenSea standard.
-
-## Configuration
-
-Edit `config.py` to define layers and rarity weights:
-
-```python
-CONFIG = [
-    {
-        "id": 1,
-        "name": "background",
-        "directory": "Background",
-        "required": True,
-        "rarity_weights": None,  # Equal distribution
-    },
-    # ... more layers
-]
-```
-
-## Assets
-
-Place layer images in `assets/` directory:
-
-```
-assets/
-├── Background/
-├── Body/
-└── ...
-```
 
 ## Output
 
